@@ -33,8 +33,10 @@ function Set-VerifiedModule([byte[]]$NewBytes,[string]$ExpectedCurrent,[string]$
         if ((Get-FileHash -LiteralPath $temp -Algorithm SHA256).Hash -ne $ExpectedNew) { throw 'Staged file hash mismatch.' }
         Assert-Closed
         if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $ExpectedCurrent) { throw 'Target changed during operation. Aborting.' }
-        [System.IO.File]::Replace($temp,$path,$null)
-        if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $ExpectedNew) { throw 'Final verification failed. Preserve the original backup.' }
+        $rollback = "$temp.rollback"
+        [System.IO.File]::Replace($temp,$path,$rollback)
+        if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $ExpectedNew) { throw "Final verification failed. Preserve the original backup and $rollback." }
+        Remove-Item -LiteralPath $rollback -Force
     } finally {
         if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp -Force }
     }
