@@ -2,7 +2,7 @@
 
 An **unofficial Windows workaround** for Adobe Photoshop **Export As** truncating filenames that contain multiple dots.
 
-> **Tested:** Adobe Photoshop 2027 / **28.0.0**, Windows 11; **PNG single-image export only**. Other Photoshop versions, formats, and export modes have **not** been validated. This is **not** an Adobe-supported fix.
+> **Tested:** Adobe Photoshop 2027 / **28.0.0**, Windows 11; **PNG and JPG single-image export**. Other Photoshop versions, formats, and export modes have **not** been validated. This is **not** an Adobe-supported fix.
 
 ## Problem
 
@@ -28,7 +28,7 @@ The workaround changes just that branch:
 c=false,u=1===a.length
 ```
 
-This causes the local export flow to use UXP's `storage.localFileSystem.getFileForSaving()` rather than the cloud-enabled `photoshop.exportmanager.getExportFolder()` path. The filename was preserved in one confirmed PNG export test. **It does not prove precisely where the native Export Manager truncates the name.**
+This causes the local export flow to use UXP's `storage.localFileSystem.getFileForSaving()` rather than the cloud-enabled `photoshop.exportmanager.getExportFolder()` path. Filename preservation was confirmed in PNG and JPG export tests. **It does not prove precisely where the native Export Manager truncates the name.**
 
 **Trade-off:** Cloud export from Export As may stop working. No changes are made to Save for Web or Premiere Pro.
 
@@ -49,7 +49,13 @@ This causes the local export flow to use UXP's `storage.localFileSystem.getFileF
    .\Install-Fix.ps1
    ```
 
-The installer checks the exact known minified expression and **the 2,288,226-byte module size from the tested Photoshop installation** before modifying anything. It refuses to patch unknown versions, pre-patched files, or existing backups; it saves a SHA256-verified original backup.
+The installer checks the exact SHA256 of the supported original module and the generated patch. It refuses unknown module hashes, reuses an existing verified original backup, and safely does nothing if the patch is already installed. Replacement is staged, verified and performed using Windows File.Replace.
+
+Supported original SHA256: `C47EF30FE8E81234550DE2FF93D82EF6A56E2C7663A23F43FE87042A79C13A15`
+
+Patched SHA256: `281E934FBC54879C3DB921F5448B994D4EF02FA69C7CFA882844598014D5E1EA`
+
+These hashes identify the tested module, not an official Adobe signature.
 
 Default module path:
 
@@ -70,15 +76,19 @@ Close Photoshop, run **Windows PowerShell as Administrator**, and use:
 .\Uninstall-Fix.ps1
 ```
 
-The uninstaller verifies the original backup SHA256 and the expected patched code before restoring. It **preserves the backup** afterward. If Photoshop updated the target file, the uninstaller refuses to overwrite the newer version.
+The uninstaller verifies the exact known patched SHA256 and original backup SHA256 before restoring. Repeated uninstall is a no-op when the original module is already present. It **preserves the backup** afterward. If Photoshop updated the target file, the uninstaller refuses to overwrite the newer version.
 
 ### Troubleshooting
 
-- **Unexpected module size / unexpected source state:** Your installed Photoshop build is not the tested one, or the file has already been modified. Do not force the patch; open an issue with your exact Photoshop version and module size.
-- **Backup already exists:** Stop and inspect the prior backup. Never overwrite it with a modified file.
+- **Unsupported module SHA256 / unexpected source state:** Your installed Photoshop build is not the tested one, or the file has already been modified. Do not force the patch; open an issue with your exact Photoshop version and module SHA256.
+- **Backup or metadata mismatch:** Stop and inspect the prior backup. A verified backup is reused automatically; incomplete or mismatched backups are rejected. Never overwrite an original backup with a modified file.
 - **Access denied:** Start PowerShell with administrative privileges. Ensure Photoshop is closed.
 - **Export As stops working:** Use `Uninstall-Fix.ps1` to restore the verified original file.
 - **Photoshop updated:** The update may overwrite the workaround. Re-check compatibility rather than blindly reapplying it.
+
+## Validation and limitations
+
+Installation, dry runs, uninstall, repeated installation/uninstall, verified backup reuse and atomic replacement were tested on Windows 11 with Windows PowerShell 5.1. PNG and JPG export worked after installation. Fresh backup creation was tested with the earlier installer; the final revision was tested with an existing verified backup. Rejection of deliberately incompatible hashes and failure recovery have not been independently exercised. Other builds and cloud export are untested.
 
 ## Adobe bug report
 
