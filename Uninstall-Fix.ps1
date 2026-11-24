@@ -1,54 +1,61 @@
 #Requires -Version 5.1
-<#
-.SYNOPSIS
-  Safely restores the original Photoshop Export As JavaScript module.
-#>
 [CmdletBinding()]
 param(
     [string]$PhotoshopDirectory = "C:\Program Files\Adobe\Adobe Photoshop 2027",
     [switch]$WhatIf
 )
 $ErrorActionPreference = 'Stop'
-if (Get-Process -Name Photoshop -ErrorAction SilentlyContinue) {
-    throw 'Close Adobe Photoshop before running this script.'
-}
 $path = Join-Path $PhotoshopDirectory 'Required\UXP\com.adobe.photoshop.exportAs\js\0.js'
 $backup = "$path.filename-fix-original.bak"
 $metadata = "$path.filename-fix-original.sha256"
-if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-    throw "Module not found: $path"
+$originalHash = 'C47EF30FE8E81234550DE2FF93D82EF6A56E2C7663A23F43FE87042A79C13A15'
+$patchedHash = '281E934FBC54879C3DB921F5448B994D4EF02FA69C7CFA882844598014D5E1EA'
+$utf8 = [System.Text.UTF8Encoding]::new($false,$true)
+function Get-BytesHash([byte[]]$Bytes) {
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try { return [BitConverter]::ToString($sha.ComputeHash($Bytes)).Replace('-','') }
+    finally { $sha.Dispose() }
 }
-if (-not (Test-Path -LiteralPath $backup -PathType Leaf) -or -not (Test-Path -LiteralPath $metadata -PathType Leaf)) {
-    throw 'Verified original backup and hash metadata are required. No changes made.'
+function Assert-Closed {
+    if (Get-Process -Name Photoshop -ErrorAction SilentlyContinue) {
+        throw 'Close Photoshop before continuing.'
+    }
 }
-$expectedHash = [System.IO.File]::ReadAllText($metadata).Trim()
-if ($expectedHash -notmatch '^[A-Fa-f0-9]{64}$') {
-    throw 'Malformed backup SHA256 metadata.'
+Assert-Closed
+if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Module not found: $path" }
+$bytes = [System.IO.File]::ReadAllBytes($path)
+$currentHash = Get-BytesHash $bytes
+# Stage and verify replacement before atomically replacing the target.
+function Set-VerifiedModule([byte[]]$NewBytes,[string]$ExpectedCurrent,[string]$ExpectedNew) {
+    $temp = "$path.filename-fix-$([Guid]::NewGuid().ToString('N')).tmp"
+    try {
+        [System.IO.File]::WriteAllBytes($temp,$NewBytes)
+        if ((Get-FileHash -LiteralPath $temp -Algorithm SHA256).Hash -ne $ExpectedNew) { throw 'Staged file hash mismatch.' }
+        Assert-Closed
+        if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $ExpectedCurrent) { throw 'Target changed during operation. Aborting.' }
+        [System.IO.File]::Replace($temp,$path,$null)
+        if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $ExpectedNew) { throw 'Final verification failed. Preserve the original backup.' }
+    } finally {
+        if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp -Force }
+    }
 }
-$actualHash = (Get-FileHash -LiteralPath $backup -Algorithm SHA256).Hash
-if ($actualHash -ne $expectedHash) {
-    throw 'Backup SHA256 mismatch. Aborting restoration.'
+function Assert-Backup {
+    if (-not (Test-Path -LiteralPath $backup -PathType Leaf) -or -not (Test-Path -LiteralPath $metadata -PathType Leaf)) { throw 'Backup or metadata missing. No changes made.' }
+    if ((Get-FileHash -LiteralPath $backup -Algorithm SHA256).Hash -ne $originalHash -or [System.IO.File]::ReadAllText($metadata).Trim() -ne $originalHash) { throw 'Backup or metadata SHA256 mismatch. No changes made.' }
 }
-$utf8Strict = [System.Text.UTF8Encoding]::new($false, $true)
-$current = $utf8Strict.GetString([System.IO.File]::ReadAllBytes($path))
-$patched = 'c=false,u=1===a.length'
-$original = 'c=t().app.isCloudExportEnabled,u=1===a.length'
-if ([regex]::Matches($current,[regex]::Escape($patched)).Count -ne 1 -or
-    [regex]::Matches($current,[regex]::Escape($original)).Count -ne 0) {
-    throw 'Current file does not match the expected patched state. This could be an Adobe update. No changes made.'
-}
-$backupBytes = [System.IO.File]::ReadAllBytes($backup)
-$backupCode = $utf8Strict.GetString($backupBytes)
-if ([regex]::Matches($backupCode,[regex]::Escape($original)).Count -ne 1) {
-    throw 'Backup does not contain the expected original code. No changes made.'
-}
-if ($WhatIf) {
-    Write-Host "DRY RUN: Would restore $path"
+if ($currentHash -eq $originalHash) {
+    Write-Host 'Original module already present. No changes made.'
     return
 }
-[System.IO.File]::WriteAllBytes($path,$backupBytes)
-if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $expectedHash) {
-    throw 'Restored file verification failed; preserve the backup and investigate.'
+if ($currentHash -ne $patchedHash) { throw "Unsupported module SHA256: $currentHash. No changes made." }
+Assert-Backup
+$originalBytes = [System.IO.File]::ReadAllBytes($backup)
+if ((Get-BytesHash $originalBytes) -ne $originalHash) { throw 'Backup changed during operation.' }
+if ($WhatIf) {
+    Write-Host "DRY RUN: Would restore $path"
+    Write-Host 'No changes made.'
+    return
 }
+Set-VerifiedModule $originalBytes $patchedHash $originalHash
 Write-Host 'Original Export As module restored successfully.' -ForegroundColor Green
 Write-Host "Backup remains at $backup (not deleted)."
